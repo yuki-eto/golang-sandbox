@@ -14,6 +14,7 @@ import (
 
 type NHKNewsFlash struct {
 	XMLName xml.Name `xml:"flashNews"`
+	Raw     string   `xml:",innerxml"`
 	Flag    string   `xml:"flag,attr"`
 	PubDate string   `xml:"pubDate,attr"`
 	Report  []struct {
@@ -73,8 +74,8 @@ func parseXML() error {
 	}
 	if lastPubDate == nil || !lastPubDate.Equal(pubDate) {
 		lastPubDate = &pubDate
+		log.Print("updated")
 	} else {
-		log.Print("not updated")
 		return nil
 	}
 
