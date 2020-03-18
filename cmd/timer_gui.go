@@ -100,16 +100,21 @@ const vm = new Vue({
 		return
 	}
 
-	m, err := strconv.ParseUint(min, 10, 64)
+	m, err := strconv.ParseFloat(min, 64)
 	if err != nil {
 		panic(err)
 	}
-	if m < 1 || m > 1440 {
-		fmt.Println("target min have to 1 - 1440")
+	if m > 1440 {
+		fmt.Println("remain time over 24 hours")
 		return
 	}
 	now := time.Now()
-	d := time.Duration(m) * time.Minute
+	sec := m * 60
+	if sec < 1 {
+		fmt.Println("remain time under 1 second")
+		return
+	}
+	d := time.Duration(sec) * time.Second
 	timer := NewTimer(&now, d)
 	timer.Update()
 
@@ -134,7 +139,7 @@ const vm = new Vue({
 		for {
 			select {
 			case <-timer.EndCh:
-				notify.Alert("Timer", fmt.Sprintf("%d minutes passed", m), "", "")
+				notify.Alert("Timer", fmt.Sprintf("%.02f minutes passed", m), "", "")
 				w.Exit()
 			case <-sig:
 				w.Exit()
