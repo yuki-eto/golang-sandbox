@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/martinlindhe/notify"
 	"github.com/zserge/webview"
 )
 
@@ -30,7 +31,7 @@ func NewTimer(t *time.Time, d time.Duration) *Timer {
 
 func (t *Timer) Update() {
 	now := time.Now()
-	t.Now = now.Format("2006/01/02 15:04:05.0 MST")
+	t.Now = now.Format("2006/01/02 15:04:05 MST")
 
 	if now.After(*t.target) {
 		t.EndCh <- true
@@ -64,29 +65,29 @@ func main() {
     <title>Hello, world!</title>
   </head>
   <body>
-    <div class="jumbotron text-center text-monospace">
-      <h1 class="display-4 text-monospace" id="remain"></h1>
-      <p class="lead" id="time"></p>
+    <div id="root">
+      <div class="jumbotron text-center text-monospace">
+        <h1 class="display-4 text-monospace">{{ timer.remain }}</h1>
+        <p class="lead">{{ timer.now }}</p>
+      </div>
     </div>
 
 <script src="https://code.jquery.com/jquery-3.4.1.slim.min.js" integrity="sha384-J6qa4849blE2+poT4WnyKhv5vZF5SrPo0iEjwBvKU7imGFAV0wwj1yYfoRSJoZ+n" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js" integrity="sha384-Q6E9RHvbIyZFJoft+2mJbHaEWldlvI9IOYy5n3zV9zzTtmI3UksdQRVvoxMfooAo" crossorigin="anonymous"></script>
 <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/js/bootstrap.min.js" integrity="sha384-wfSDF2E50Y2D1uUdj0O3uMBJnjuUD4Ih7YwaYd1iqfktj0Uod8GCExl3Og8ifwB6" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/vue@2.6.11"></script>
 <script>
-window.onload = () => {
-  const t = document.getElementById('time');
-  const rem = document.getElementById('remain');
-  const render = () => {
-    t.innerText = Timer.data.now;
-    rem.innerText = Timer.data.remain;
-  };
-  render();
-
-  setInterval(() => {
-    Timer.update();
-    render();
-  }, 100);
-};
+const vm = new Vue({
+  el: '#root',
+  data: { timer: Timer.data },
+  mounted: function() {
+   const self = this;
+   setInterval(() => {
+     Timer.update();
+     self.timer = Timer.data;
+   }, 100);
+  },
+});
 </script>
   </body>
 </html>
@@ -108,8 +109,8 @@ window.onload = () => {
 		return
 	}
 	now := time.Now()
-	targetMin := time.Duration(m) * time.Minute
-	timer := NewTimer(&now, targetMin)
+	d := time.Duration(m) * time.Minute
+	timer := NewTimer(&now, d)
 	timer.Update()
 
 	w := webview.New(webview.Settings{
@@ -133,6 +134,7 @@ window.onload = () => {
 		for {
 			select {
 			case <-timer.EndCh:
+				notify.Alert("Timer", fmt.Sprintf("%d minutes passed", m), "", "")
 				w.Exit()
 			case <-sig:
 				w.Exit()
