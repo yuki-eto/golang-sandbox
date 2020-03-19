@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/xml"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/martinlindhe/notify"
+	"golang.org/x/xerrors"
 )
 
 type NHKNewsFlash struct {
@@ -45,7 +47,7 @@ func main() {
 				return
 			}
 			if err := parseXML(); err != nil {
-				panic(err)
+				log.Printf("error: %+v", err)
 			}
 		case <-sig:
 			log.Print("interrupted")
@@ -57,15 +59,19 @@ func main() {
 func parseXML() error {
 	resp, err := http.Get("https://www3.nhk.or.jp/sokuho/news/sokuho_news.xml")
 	if err != nil {
-		return err
+		return xerrors.Errorf(": %w", err)
 	}
 	reader := resp.Body
 	defer reader.Close()
 
-	dec := xml.NewDecoder(reader)
+	b, err := ioutil.ReadAll(reader)
+	if err != nil {
+		return xerrors.Errorf(": %w", err)
+	}
 	var news NHKNewsFlash
-	if err := dec.Decode(&news); err != nil {
-		return err
+	if err := xml.Unmarshal(b, &news); err != nil {
+		log.Printf("xml: %s", string(b))
+		return xerrors.Errorf(": %w", err)
 	}
 
 	pubDate, err := time.Parse(time.RFC1123Z, news.PubDate)

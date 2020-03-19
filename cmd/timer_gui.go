@@ -1,53 +1,16 @@
 package main
 
 import (
-	"flag"
 	"fmt"
+	"log"
 	"net/url"
-	"os"
-	"os/signal"
-	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/martinlindhe/notify"
 	"github.com/zserge/webview"
 )
 
-type Timer struct {
-	target *time.Time
-	Now    string    `json:"now"`
-	Remain string    `json:"remain"`
-	EndCh  chan bool `json:"-"`
-}
-
-func NewTimer(t *time.Time, d time.Duration) *Timer {
-	target := t.Add(d)
-	return &Timer{
-		target: &target,
-		EndCh:  make(chan bool, 1),
-	}
-}
-
-func (t *Timer) Update() {
-	now := time.Now()
-	t.Now = now.Format("2006/01/02 15:04:05 MST")
-
-	if now.After(*t.target) {
-		t.EndCh <- true
-		return
-	}
-
-	diff := t.target.Sub(now)
-	hour := uint64(diff.Hours()) % 24
-	min := uint64(diff.Minutes()) % 60
-	sec := uint64(diff.Seconds()) % 60
-	msec := (uint64(diff.Milliseconds()) % 1000) / 100
-	t.Remain = fmt.Sprintf("Remain %02d:%02d:%02d.%01d", hour, min, sec, msec)
-}
-
-func main() {
-	const html = `
+const html = `
 <!doctype html>
 <html>
   <head>
@@ -62,30 +25,84 @@ func main() {
         -webkit-user-select: none;
       }
     </style>
-    <title>Hello, world!</title>
   </head>
   <body>
     <div id="root">
-      <div class="jumbotron text-center text-monospace">
+      <div class="jumbotron text-center text-monospace" v-show="isEnabledTimer">
         <h1 class="display-4 text-monospace">{{ timer.remain }}</h1>
         <p class="lead">{{ timer.now }}</p>
       </div>
+
+      <form v-show="!isEnabledTimer">
+        <div class="form-group">
+          <label for="formControlHours">Hours</label>
+          <input type="range" class="custom-range" min="0" max="23" step="1" id="formControlHours" v-model="hours" @input="setDuration" />
+          {{ hours }}
+        </div>
+        <div class="form-group">
+          <label for="formControlMinutes">Minutes</label>
+          <input type="range" class="custom-range" min="0" max="59" step="1" id="formControlMinutes" v-model="minutes" @input="setDuration" />
+          {{ minutes }}
+        </div>
+        <div class="form-group">
+          <label for="formControlSeconds">Seconds</label>
+          <input type="range" class="custom-range" min="0" max="59" step="1" id="formControlSeconds" v-model="seconds" @input="setDuration" />
+          {{ seconds }}
+        </div>
+      </form>
+
+      <div class="text-center">
+        <button type="button" class="btn btn-warning" v-show="isEnabledTimer && !timer.isStopped" @click="stopTimer">Stop</button>
+        <button type="button" class="btn btn-danger" v-show="timer.isStarted && timer.isStopped" @click="resetTimer">Reset</button>
+        <button type="button" class="btn btn-primary" v-show="!timer.isStarted || timer.isStopped" @click="startTimer">Start</button>
+      </div>
     </div>
+
 
 <script src="https://code.jquery.com/jquery-3.4.1.slim.min.js" integrity="sha384-J6qa4849blE2+poT4WnyKhv5vZF5SrPo0iEjwBvKU7imGFAV0wwj1yYfoRSJoZ+n" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js" integrity="sha384-Q6E9RHvbIyZFJoft+2mJbHaEWldlvI9IOYy5n3zV9zzTtmI3UksdQRVvoxMfooAo" crossorigin="anonymous"></script>
 <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/js/bootstrap.min.js" integrity="sha384-wfSDF2E50Y2D1uUdj0O3uMBJnjuUD4Ih7YwaYd1iqfktj0Uod8GCExl3Og8ifwB6" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11"></script>
 <script>
+const timer = Vue.observable(Timer.data);
 const vm = new Vue({
   el: '#root',
-  data: { timer: Timer.data },
+  data: {
+    timer: timer,
+    hours: 0,
+    minutes: 5,
+    seconds: 0,
+    intervalId: null,
+  },
   mounted: function() {
-   const self = this;
-   setInterval(() => {
-     Timer.update();
-     self.timer = Timer.data;
-   }, 100);
+    const self = this;
+  },
+  methods: {
+    setDuration() {
+      Timer.setDuration(parseInt(this.hours, 10), parseInt(this.minutes, 10), parseInt(this.seconds, 10));
+    },
+    startTimer() {
+      Timer.start();
+      const id = setInterval(() => {
+        Timer.update();
+        this.timer = Timer.data;
+      }, 500);
+    },
+    stopTimer() {
+      Timer.stop();
+      if (this.intervalId !== null) {
+        clearInterval(this.intervalId);
+        this.intervalId = null;
+      }
+    },
+    resetTimer() {
+      Timer.reset(parseInt(this.hours, 10), parseInt(this.minutes, 10), parseInt(this.seconds, 10));
+    },
+  },
+  computed: {
+    isEnabledTimer: function() {
+      return this.timer.isStarted && this.timer.remain !== '';
+    },
   },
 });
 </script>
@@ -93,36 +110,103 @@ const vm = new Vue({
 </html>
 `
 
-	flag.Parse()
-	min := flag.Arg(0)
-	if min == "" {
-		fmt.Println("please input target minutes")
+type Timer struct {
+	duration time.Duration
+	h, m, s  uint64
+	target   *time.Time
+	timer    *time.Timer
+
+	IsStarted bool   `json:"isStarted"`
+	IsStopped bool   `json:"isStopped"`
+	Now       string `json:"now"`
+	Remain    string `json:"remain"`
+}
+
+func (t *Timer) SetDuration(h, m, s uint64) {
+	t.h = h
+	t.m = m
+	t.s = s
+}
+
+func (t *Timer) Reset(h, m, s uint64) {
+	t.SetDuration(h, m, s)
+	t.timer = nil
+	t.target = nil
+	t.IsStarted = false
+	t.IsStopped = false
+	t.Now = ""
+	t.Remain = ""
+}
+
+func (t *Timer) Start() {
+	t.IsStarted = true
+	t.IsStopped = false
+	if t.duration == 0 {
+		d := time.Duration(t.h) * time.Hour
+		d += time.Duration(t.m) * time.Minute
+		d += time.Duration(t.s) * time.Second
+		t.duration = d
+	}
+
+	target := time.Now().Add(t.duration)
+	t.target = &target
+	if t.timer != nil {
+		t.timer.Reset(t.duration)
 		return
 	}
 
-	m, err := strconv.ParseFloat(min, 64)
-	if err != nil {
-		panic(err)
-	}
-	if m > 1440 {
-		fmt.Println("remain time over 24 hours")
-		return
-	}
+	timer := time.NewTimer(t.duration)
+	t.timer = timer
+	go func() {
+		<-timer.C
+		notify.Alert("Timer", fmt.Sprint("duration passed"), "", "")
+		t.target = nil
+		t.timer = nil
+		t.IsStarted = false
+		t.duration = 0
+	}()
+}
+
+func (t *Timer) Stop() {
+	t.timer.Stop()
 	now := time.Now()
-	sec := m * 60
-	if sec < 1 {
-		fmt.Println("remain time under 1 second")
+	diff := t.target.Sub(now)
+	t.duration = diff
+	t.IsStopped = true
+	t.target = nil
+}
+
+func (t *Timer) Update() {
+
+	now := time.Now()
+	t.Now = now.Format("2006/01/02 15:04:05 MST")
+	if t.target == nil || now.After(*t.target) {
 		return
 	}
-	d := time.Duration(sec) * time.Second
-	timer := NewTimer(&now, d)
-	timer.Update()
+
+	diff := t.target.Sub(now)
+	h := uint64(diff.Hours()) % 24
+	m := uint64(diff.Minutes()) % 60
+	s := uint64(diff.Seconds()) % 60
+	t.Remain = fmt.Sprintf("Remain %02d:%02d:%02d", h, m, s)
+	t.duration = diff
+}
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatalf("%+v", err)
+	}
+}
+
+func run() error {
+	timer := &Timer{}
+	timer.SetDuration(0, 5, 0)
 
 	w := webview.New(webview.Settings{
-		Title:                  "webview",
+		Title:                  "Timer",
 		URL:                    "data:text/html," + url.PathEscape(html),
 		Width:                  640,
-		Height:                 240,
+		Height:                 340,
 		Resizable:              false,
 		Debug:                  true,
 		ExternalInvokeCallback: nil,
@@ -132,20 +216,6 @@ const vm = new Vue({
 		w.Bind("Timer", timer)
 	})
 
-	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGINT, syscall.SIGABRT)
-
-		for {
-			select {
-			case <-timer.EndCh:
-				notify.Alert("Timer", fmt.Sprintf("%.02f minutes passed", m), "", "")
-				w.Exit()
-			case <-sig:
-				w.Exit()
-			}
-		}
-	}()
-
 	w.Run()
+	return nil
 }
