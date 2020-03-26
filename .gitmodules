@@ -1,0 +1,3 @@
+[submodule "calc_lib"]
+	path = calc_lib
+	url = git@github.com:yuki-eto/cpp-cmake-gtest-boilerplate.git
